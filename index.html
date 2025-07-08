@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>3Dボクセルアニメーションツール</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background-color: #202020;
+      color: #fff;
+      text-align: center;
+    }
+
+    h1 { margin: 20px; }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin: 10px;
+    }
+
+    input, button, label {
+      padding: 5px;
+    }
+
+    #canvasContainer {
+      width: 100%;
+      height: 75vh;
+      margin-top: 10px;
+      overflow: hidden;
+    }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <h1>3Dボクセルアニメーション</h1>
+
+  <div class="controls">
+    <label>画像複数選択: <input type="file" id="multiImageInput" accept="image/*" multiple /></label>
+    <label>横: <input type="number" id="gridWidth" value="16" min="1" /></label>
+    <label>縦: <input type="number" id="gridHeight" value="16" min="1" /></label>
+    <label>厚み: <input type="number" id="depth" value="1" min="1" /></label>
+    <label>速度（枚/秒）: <input type="number" id="fps" value="2" min="1" /></label>
+
+    <button id="playBtn">▶️再生</button>
+    <button id="pauseBtn">⏸️停止</button>
+    <button id="prevBtn">←前</button>
+    <button id="nextBtn">次→</button>
+  </div>
+
+  <div id="canvasContainer"></div>
+
+  <script type="module">
+    import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const imageInput = document.getElementById("multiImageInput");
+const gridWidthInput = document.getElementById("gridWidth");
+const gridHeightInput = document.getElementById("gridHeight");
+const depthInput = document.getElementById("depth");
+const fpsInput = document.getElementById("fps");
+
+const playBtn = document.getElementById("playBtn");
+const pauseBtn = document.getElementById("pauseBtn");
+const prevBtn = document.getElementById("prevBtn");
+const nextBtn = document.getElementById("nextBtn");
+const canvasContainer = document.getElementById("canvasContainer");
+
+let scene, camera, renderer, controls;
+let frames = []; // 各フレームのメッシュリスト
+let currentFrame = 0;
+let playInterval = null;
+
+// 初期化
+function initScene() {
+  canvasContainer.innerHTML = "";
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 1000);
+  camera.position.set(0, 0, 30);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+  canvasContainer.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  const light = new THREE.DirectionalLight(0xffffff, 1);
+  light.position.set(2, 2, 5);
+  scene.add(light);
+  scene.add(new THREE.AmbientLight(0x888888));
+
+  animate();
+}
+
+// アニメーションループ
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// 指定フレームを表示
+function showFrame(index) {
+  if (index < 0 || index >= frames.length) return;
+  // 既存メッシュ削除
+  for (const mesh of scene.children.filter(obj => obj.isMesh)) {
+    scene.remove(mesh);
+  }
+  // 新フレーム追加
+  for (const mesh of frames[index]) {
+    scene.add(mesh.clone());
+  }
+  currentFrame = index;
+}
+
+// 再生
+function play() {
+  const fps = parseInt(fpsInput.value);
+  const interval = 1000 / fps;
+  if (playInterval) clearInterval(playInterval);
+  playInterval = setInterval(() => {
+    currentFrame = (currentFrame + 1) % frames.length;
+    showFrame(currentFrame);
+  }, interval);
+}
+
+// 停止
+function pause() {
+  if (playInterval) clearInterval(playInterval);
+  playInterval = null;
+}
+
+// 次へ
+nextBtn.addEventListener("click", () => {
+  currentFrame = (currentFrame + 1) % frames.length;
+  showFrame(currentFrame);
+});
+
+// 前へ
+prevBtn.addEventListener("click", () => {
+  currentFrame = (currentFrame - 1 + frames.length) % frames.length;
+  showFrame(currentFrame);
+});
+
+playBtn.addEventListener("click", play);
+pauseBtn.addEventListener("click", pause);
+
+// 画像読み込み→変換
+imageInput.addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  if (files.length === 0) return;
+
+  const gridW = parseInt(gridWidthInput.value);
+  const gridH = parseInt(gridHeightInput.value);
+  const depth = parseInt(depthInput.value);
+
+  frames = [];
+  initScene();
+
+  for (const file of files) {
+    const imgBitmap = await createImageBitmap(file);
+    const canvas = document.createElement("canvas");
+    canvas.width = gridW;
+    canvas.height = gridH;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(imgBitmap, 0, 0, gridW, gridH);
+    const imgData = ctx.getImageData(0, 0, gridW, gridH).data;
+
+    const meshList = [];
+    const offsetX = -gridW / 2;
+    const offsetY = -gridH / 2;
+
+    for (let y = 0; y < gridH; y++) {
+      for (let x = 0; x < gridW; x++) {
+        const i = (y * gridW + x) * 4;
+        const r = imgData[i];
+        const g = imgData[i + 1];
+        const b = imgData[i + 2];
+        const a = imgData[i + 3];
+        if (a === 0) continue;
+
+        const color = new THREE.Color(`rgb(${r}, ${g}, ${b})`);
+        const geometry = new THREE.BoxGeometry(1, 1, depth);
+        const material = new THREE.MeshStandardMaterial({ color });
+        const cube = new THREE.Mesh(geometry, material);
+        cube.position.set(x + offsetX, -y + offsetY, 0);
+        meshList.push(cube);
+      }
+    }
+    frames.push(meshList);
+  }
+
+  showFrame(0);
+});
+  </script>
+</body>
+</html>
